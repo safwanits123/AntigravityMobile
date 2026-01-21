@@ -3,15 +3,11 @@
 A mobile-friendly dashboard for [Antigravity IDE](https://antigravity.google) that lets you monitor your AI conversations and model quotas from any device.
 
 <p align="center">
-  <img src="screenshots/1.png?v=2" width="200" alt="PIN Authentication" />
-  <img src="screenshots/2.png?v=2" width="200" alt="Chat View (Dark)" />
-  <img src="screenshots/3.png?v=2" width="200" alt="Settings &amp; Quota Monitor" />
+  <img src="screenshots/screenshot01.png?v=2" width="200" alt="View1" />
+  <img src="screenshots/screenshot02.png?v=2" width="200" alt="View2" />
+  <img src="screenshots/screenshot03.png?v=2" width="200" alt="View3" />
 </p>
-<p align="center">
-  <img src="screenshots/4.png?v=2" width="200" alt="Chat View (Light)" />
-  <img src="screenshots/5.png?v=2" width="200" alt="File Browser" />
-  <img src="screenshots/6.png?v=2" width="200" alt="File Editor" />
-</p>
+
 
 ## ✨ Features
 
