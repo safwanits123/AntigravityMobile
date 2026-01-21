@@ -597,6 +597,127 @@ app.get('/api/quota/status', async (req, res) => {
 });
 
 // ============================================================================
+// Model & Mode Control Endpoints
+// ============================================================================
+
+// Get current model and mode
+app.get('/api/models', async (req, res) => {
+    try {
+        const result = await CDP.getAvailableModels();
+        const modeResult = await CDP.getModelAndMode();
+        res.json({
+            models: result.models || [],
+            currentModel: modeResult.model || result.current || 'Unknown',
+            currentMode: modeResult.mode || 'Unknown'
+        });
+    } catch (e) {
+        // Return known defaults on error
+        res.json({
+            models: [
+                'Gemini 3 Pro (High)',
+                'Gemini 3 Pro (Low)',
+                'Gemini 3 Flash',
+                'Claude Sonnet 4.5',
+                'Claude Sonnet 4.5 (Thinking)',
+                'Claude Opus 4.5 (Thinking)',
+                'GPT-OSS 120B (Medium)'
+            ],
+            currentModel: 'Unknown',
+            currentMode: 'Unknown',
+            error: e.message
+        });
+    }
+});
+
+// Set model
+app.post('/api/models/set', async (req, res) => {
+    try {
+        const { model } = req.body;
+        console.log('[SetModel] Request received for model:', model);
+        if (!model) {
+            return res.status(400).json({ error: 'Model name required' });
+        }
+        const result = await CDP.setModel(model);
+        console.log('[SetModel] CDP result:', JSON.stringify(result));
+        if (result.success) {
+            broadcast('model_changed', { model: result.selected });
+        }
+        res.json(result);
+    } catch (e) {
+        console.log('[SetModel] Error:', e.message);
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
+// Get available modes
+app.get('/api/modes', async (req, res) => {
+    try {
+        const result = await CDP.getAvailableModes();
+        res.json(result);
+    } catch (e) {
+        res.json({
+            modes: [
+                { name: 'Planning', description: 'Agent can plan before executing. Use for complex tasks.' },
+                { name: 'Fast', description: 'Agent executes tasks directly. Use for simple tasks.' }
+            ],
+            current: 'Planning',
+            error: e.message
+        });
+    }
+});
+
+// Set mode
+app.post('/api/modes/set', async (req, res) => {
+    try {
+        const { mode } = req.body;
+        if (!mode) {
+            return res.status(400).json({ error: 'Mode name required' });
+        }
+        const result = await CDP.setMode(mode);
+        if (result.success) {
+            broadcast('mode_changed', { mode: result.selected });
+        }
+        res.json(result);
+    } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
+// ============================================================================
+// Command Approval Endpoints
+// ============================================================================
+
+// Get pending approvals
+app.get('/api/approvals', async (req, res) => {
+    try {
+        const result = await CDP.getPendingApprovals();
+        res.json(result);
+    } catch (e) {
+        res.json({ pending: false, count: 0, error: e.message });
+    }
+});
+
+// Respond to approval (approve or reject)
+app.post('/api/approvals/respond', async (req, res) => {
+    try {
+        const { action } = req.body;
+        if (!action || !['approve', 'reject'].includes(action)) {
+            return res.status(400).json({ error: 'Action must be "approve" or "reject"' });
+        }
+        console.log('[Approvals] Responding with:', action);
+        const result = await CDP.respondToApproval(action);
+        console.log('[Approvals] Result:', JSON.stringify(result));
+        if (result.success) {
+            broadcast('approval_responded', { action: result.action });
+        }
+        res.json(result);
+    } catch (e) {
+        console.log('[Approvals] Error:', e.message);
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
+// ============================================================================
 // File Upload & File Browser Endpoints
 // ============================================================================
 

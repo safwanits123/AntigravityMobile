@@ -645,3 +645,861 @@ export async function getWorkspacePath() {
         client.close();
     }
 }
+
+/**
+ * Get the current model and mode from the IDE input area
+ * Searches through all execution contexts (including webviews) to find the model selector
+ * Returns: { model: string, mode: string }
+ */
+export async function getModelAndMode() {
+    const target = await findEditorTarget();
+    if (!target) throw new Error('No editor target found');
+
+    return new Promise(async (resolve) => {
+        const { default: WebSocket } = await import('ws');
+        const ws = new WebSocket(target.webSocketDebuggerUrl);
+
+        const contexts = [];
+        let messageId = 1;
+        const pending = new Map();
+
+        const call = (method, params = {}) => new Promise((res, rej) => {
+            const id = messageId++;
+            pending.set(id, { resolve: res, reject: rej });
+            ws.send(JSON.stringify({ id, method, params }));
+            // Timeout after 3s
+            setTimeout(() => {
+                if (pending.has(id)) {
+                    pending.delete(id);
+                    rej(new Error('Timeout'));
+                }
+            }, 3000);
+        });
+
+        ws.on('message', (msg) => {
+            try {
+                const data = JSON.parse(msg.toString());
+                if (data.id && pending.has(data.id)) {
+                    const { resolve, reject } = pending.get(data.id);
+                    pending.delete(data.id);
+                    if (data.error) reject(new Error(data.error.message));
+                    else resolve(data.result);
+                } else if (data.method === 'Runtime.executionContextCreated') {
+                    contexts.push(data.params.context);
+                }
+            } catch (e) { }
+        });
+
+        ws.on('open', async () => {
+            try {
+                // Enable runtime to receive execution context events
+                await call('Runtime.enable', {});
+                await new Promise(r => setTimeout(r, 500)); // Let contexts load
+
+                const SCRIPT = `
+                    (function() {
+                        let model = null;
+                        let mode = null;
+                        
+                        // Look for model selector - it's a P or SPAN with class containing "ellipsis"
+                        // The text is like "Claude Opus 4.5 (Thinking)" without chevron
+                        const allElements = document.querySelectorAll('p, span, div, button');
+                        
+                        for (const el of allElements) {
+                            const text = (el.innerText || el.textContent || '').trim();
+                            
+                            // Skip empty or very long text (min 4 chars for "Fast")
+                            if (text.length < 4 || text.length > 50) continue;
+                            
+                            // Check for model patterns (Claude/Gemini/GPT + variant)
+                            if (!model && /^(claude|gemini|gpt)/i.test(text) && 
+                                /(opus|sonnet|flash|pro|thinking|high|low|medium)/i.test(text)) {
+                                model = text;
+                            }
+                            
+                            // Check for mode - take first match (selected mode appears before dropdown)
+                            // The selected mode is typically the first occurrence in DOM order
+                            if (!mode && /^(planning|fast)$/i.test(text)) {
+                                mode = text;
+                            }
+                            
+                            if (model && mode) break;
+                        }
+                        
+                        return { 
+                            model: model || null,
+                            mode: mode || null
+                        };
+                    })()
+                `;
+
+                // Search all execution contexts for model/mode
+                for (const ctx of contexts) {
+                    try {
+                        const result = await call('Runtime.evaluate', {
+                            expression: SCRIPT,
+                            returnByValue: true,
+                            contextId: ctx.id
+                        });
+
+                        if (result.result?.value?.model) {
+                            ws.close();
+                            resolve(result.result.value);
+                            return;
+                        }
+                    } catch (e) { }
+                }
+
+                // If no context had model, return default
+                ws.close();
+                resolve({ model: 'Unknown', mode: 'Planning' });
+            } catch (e) {
+                ws.close();
+                resolve({ model: 'Unknown', mode: 'Planning' });
+            }
+        });
+
+        ws.on('error', () => {
+            resolve({ model: 'Unknown', mode: 'Planning' });
+        });
+    });
+}
+
+/**
+ * Get list of available models
+ * Returns: { models: string[], current: string }
+ * Note: Returns hardcoded list since dynamic scraping was picking up wrong UI elements
+ */
+export async function getAvailableModels() {
+    // Known models for Antigravity - these are the models the IDE supports
+    const knownModels = [
+        'Gemini 3 Pro (High)',
+        'Gemini 3 Pro (Low)',
+        'Gemini 3 Flash',
+        'Claude Sonnet 4.5',
+        'Claude Sonnet 4.5 (Thinking)',
+        'Claude Opus 4.5 (Thinking)',
+        'GPT-OSS 120B (Medium)'
+    ];
+
+    // Get current model/mode from the actual UI
+    try {
+        const current = await getModelAndMode();
+        return {
+            models: knownModels,
+            current: current.model || 'Unknown'
+        };
+    } catch (e) {
+        return {
+            models: knownModels,
+            current: 'Unknown'
+        };
+    }
+}
+
+/**
+ * Set the active model by clicking dropdown and selecting option
+ * Searches through all execution contexts (including webviews)
+ */
+export async function setModel(modelName) {
+    const target = await findEditorTarget();
+    if (!target) throw new Error('No editor target found');
+
+    return new Promise(async (resolve) => {
+        const { default: WebSocket } = await import('ws');
+        const ws = new WebSocket(target.webSocketDebuggerUrl);
+
+        const contexts = [];
+        let messageId = 1;
+        const pending = new Map();
+
+        const call = (method, params = {}) => new Promise((res, rej) => {
+            const id = messageId++;
+            pending.set(id, { resolve: res, reject: rej });
+            ws.send(JSON.stringify({ id, method, params }));
+            setTimeout(() => {
+                if (pending.has(id)) {
+                    pending.delete(id);
+                    rej(new Error('Timeout'));
+                }
+            }, 5000);
+        });
+
+        ws.on('message', (msg) => {
+            try {
+                const data = JSON.parse(msg.toString());
+                if (data.id && pending.has(data.id)) {
+                    const { resolve, reject } = pending.get(data.id);
+                    pending.delete(data.id);
+                    if (data.error) reject(new Error(data.error.message));
+                    else resolve(data.result);
+                } else if (data.method === 'Runtime.executionContextCreated') {
+                    contexts.push(data.params.context);
+                }
+            } catch (e) { }
+        });
+
+        ws.on('open', async () => {
+            try {
+                await call('Runtime.enable', {});
+                await new Promise(r => setTimeout(r, 500));
+
+                const SCRIPT = `
+                    (async function() {
+                        const targetModel = ${JSON.stringify(modelName)}.toLowerCase();
+                        console.log('[MobileSetModel] Target:', targetModel);
+                        
+                        // Check if this context has the model selector (look for cascade)
+                        // If we can't find cascade-related elements, this might be the wrong context, 
+                        // but we should still try to find the model button just in case.
+                        
+                        // Find model selector button - look for P with ellipsis class containing model name
+                        // OR looking for specific button-like elements that contain model keywords
+                        let modelButton = null;
+                        const allElements = document.querySelectorAll('button, div[role="button"], p, span');
+                        
+                        // Common model keywords to identify the button
+                        const modelKeywords = ['gemini', 'claude', 'gpt', 'opus', 'sonnet', 'flash', 'model'];
+                        
+                        for (const el of allElements) {
+                            const text = (el.innerText || '').trim().toLowerCase();
+                            // Skip if too short or too long
+                            if (text.length < 3 || text.length > 60) continue;
+                            
+                            if (modelKeywords.some(k => text.includes(k))) {
+                                // Found a potential label/text. Find its clickable parent or itself.
+                                const clickable = el.closest('button') || el.closest('[role="button"]') || el;
+                                // If it's just a P tag with no clickable role/tag, it might not be the trigger,
+                                // but often in this UI the P tag itself receives the click or is inside a div that does.
+                                modelButton = clickable;
+                                console.log('[MobileSetModel] Found model button:', text);
+                                break;
+                            }
+                        }
+                        
+                        if (!modelButton) {
+                            console.log('[MobileSetModel] Model button not found');
+                            return { found: true, success: false, error: 'Model button not found' };
+                        }
+                        
+                        // Click to open dropdown
+                        console.log('[MobileSetModel] Clicking model button...');
+                        modelButton.click();
+                        
+                        // Wait for dropdown to appear - increased to ensure render
+                        await new Promise(r => setTimeout(r, 600));
+                        
+                        // Try to find the option in the dropdown
+                        // The actual clickable items have cursor-pointer class
+                        
+                        // Collect all potential items first
+                        let candidates = [];
+                        
+                        // Helper to get normalized text
+                        const getNorm = (el) => (el.innerText || el.textContent || '').trim().toLowerCase();
+
+                        // First, look for elements with cursor-pointer (the actual clickable items)
+                        const cursorPointerItems = document.querySelectorAll('[class*="cursor-pointer"]');
+                        console.log('[MobileSetModel] Found', cursorPointerItems.length, 'cursor-pointer elements');
+                        
+                        for (const item of cursorPointerItems) {
+                            const text = getNorm(item);
+                            // Look for model name patterns in the text
+                            if (text.length > 3 && text.length < 100 && 
+                                modelKeywords.some(k => text.includes(k))) {
+                                candidates.push({ el: item, text });
+                                console.log('[MobileSetModel] Cursor-pointer candidate:', text.substring(0, 50));
+                            }
+                        }
+                        
+                        // If no cursor-pointer items found with model keywords, fall back to role-based selectors
+                        if (candidates.length === 0) {
+                            const menuSelectors = [
+                                '[role="listbox"] [role="option"]',
+                                '[role="menu"] [role="menuitem"]',
+                                '.monaco-list-row',
+                                '.action-item'
+                            ];
+                            
+                            for (const sel of menuSelectors) {
+                                const items = document.querySelectorAll(sel);
+                                for (const item of items) {
+                                    const text = getNorm(item);
+                                    if (text.length > 3 && text.length < 80) {
+                                      if (!candidates.some(c => c.el === item)) {
+                                          candidates.push({ el: item, text });
+                                      }
+                                    }
+                                }
+                                if (candidates.length > 0) break; 
+                            }
+                        }
+                        
+                        console.log('[MobileSetModel] Total candidates:', candidates.length);
+
+                        console.log('[MobileSetModel] Found', candidates.length, 'candidates:', candidates.slice(0, 10).map(c => c.text));
+
+                        // Now find the best candidate
+                        let bestMatch = null;
+                        
+                        // targetModel e.g. "claude sonnet 4.5"
+                        // Split by non-alphanumeric to handle punctuation differences
+                        const targetParts = targetModel.split(/[^a-z0-9]+/i).filter(p => p.length > 1);
+                        console.log('[MobileSetModel] Target parts:', targetParts);
+                        
+                        for (const cand of candidates) {
+                            const candText = cand.text;
+                            
+                            // Check 1: Exact match?
+                            if (candText === targetModel) {
+                                bestMatch = cand.el;
+                                console.log('[MobileSetModel] Exact match found!');
+                                break;
+                            }
+                            
+                            // Check 2: Contains all parts?
+                            // e.g. target="claude sonnet 4.5", cand="claude 3.5 sonnet" -> matches "claude", "sonnet"
+                            // We need to be careful not to match "gemini pro" against "gemini flash"
+                            
+                            const allPartsMatch = targetParts.every(part => candText.includes(part));
+                            
+                            if (allPartsMatch) {
+                                bestMatch = cand.el;
+                                console.log('[MobileSetModel] All parts match:', candText);
+                                break;
+                            }
+                            
+                            // Check 3: Relaxed match
+                            // If we match the first word (Model Family) AND at least one other significant word
+                            if (targetParts.length >= 2) {
+                                if (candText.includes(targetParts[0])) {
+                                    // Check for other parts
+                                    let matchCount = 0;
+                                    for (let i = 1; i < targetParts.length; i++) {
+                                        if (candText.includes(targetParts[i])) matchCount++;
+                                    }
+                                    
+                                    // If we matched Family + >50% of variant words
+                                    if (matchCount >= (targetParts.length - 1) / 2) {
+                                        bestMatch = cand.el;
+                                        console.log('[MobileSetModel] Relaxed match:', candText);
+                                    }
+                                }
+                            }
+                        }
+                        
+                        if (bestMatch) {
+                             console.log('[MobileSetModel] Clicking:', bestMatch.innerText);
+                             const debugInfo = {
+                                 tagName: bestMatch.tagName,
+                                 className: bestMatch.className,
+                                 outerHTML: bestMatch.outerHTML.substring(0, 200)
+                             };
+                             bestMatch.scrollIntoView({block: 'center', inline: 'center'});
+                             await new Promise(r => setTimeout(r, 100)); // Wait for scroll
+                             bestMatch.click();
+                             return { found: true, success: true, selected: bestMatch.innerText, debug: debugInfo };
+                        }
+                        
+                        console.log('[MobileSetModel] No match found!');
+                        
+                        // Try pressing Escape to close dropdown if we failed
+                        document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+                        return { found: true, success: false, error: 'Model option not found' };
+                    })()
+                `;
+
+                // Search all execution contexts for the model selector
+                for (const ctx of contexts) {
+                    try {
+                        const result = await call('Runtime.evaluate', {
+                            expression: SCRIPT,
+                            returnByValue: true,
+                            awaitPromise: true,
+                            contextId: ctx.id
+                        });
+
+                        if (result.result?.value?.found) {
+                            ws.close();
+                            resolve(result.result.value);
+                            return;
+                        }
+                    } catch (e) { }
+                }
+
+                ws.close();
+                resolve({ success: false, error: 'Webview context not found' });
+            } catch (e) {
+                ws.close();
+                resolve({ success: false, error: e.message });
+            }
+        });
+
+        ws.on('error', () => {
+            resolve({ success: false, error: 'WebSocket error' });
+        });
+    });
+}
+
+/**
+ * Get available conversation modes
+ * Returns: { modes: [{name, description}], current: string }
+ */
+export async function getAvailableModes() {
+    const target = await findEditorTarget();
+    if (!target) throw new Error('No editor target found');
+
+    const client = await connectToTarget(target);
+
+    try {
+        const result = await client.send('Runtime.evaluate', {
+            expression: `
+                    (function () {
+                        // Known modes
+                        const knownModes = [
+                            { name: 'Planning', description: 'Agent can plan before executing. Use for deep research, complex tasks.' },
+                            { name: 'Fast', description: 'Agent will execute tasks directly. Use for simple tasks.' }
+                        ];
+
+                        // Try to find current mode
+                        let currentMode = null;
+                        const modeKeywords = ['planning', 'fast'];
+
+                        const buttons = document.querySelectorAll('button, [role="button"]');
+                        for (const btn of buttons) {
+                            const text = (btn.innerText || btn.textContent || '').toLowerCase();
+                            if (modeKeywords.some(k => text.includes(k))) {
+                                currentMode = btn.innerText || btn.textContent;
+                                break;
+                            }
+                        }
+
+                        return {
+                            modes: knownModes,
+                            current: currentMode ? currentMode.trim() : 'Planning'
+                        };
+                    })()
+                    `,
+            returnByValue: true
+        });
+
+        return result.result?.value || { modes: [], current: 'Unknown' };
+    } finally {
+        client.close();
+    }
+}
+
+/**
+ * Set the conversation mode
+ * Searches through all execution contexts (including webviews) to find the mode selector
+ */
+export async function setMode(modeName) {
+    const target = await findEditorTarget();
+    if (!target) throw new Error('No editor target found');
+
+    return new Promise(async (resolve) => {
+        const { default: WebSocket } = await import('ws');
+        const ws = new WebSocket(target.webSocketDebuggerUrl);
+
+        const contexts = [];
+        let messageId = 1;
+        const pending = new Map();
+
+        const call = (method, params = {}) => new Promise((res, rej) => {
+            const id = messageId++;
+            pending.set(id, { resolve: res, reject: rej });
+            ws.send(JSON.stringify({ id, method, params }));
+            setTimeout(() => {
+                if (pending.has(id)) {
+                    pending.delete(id);
+                    rej(new Error('Timeout'));
+                }
+            }, 5000);
+        });
+
+        ws.on('message', (msg) => {
+            try {
+                const data = JSON.parse(msg.toString());
+                if (data.id && pending.has(data.id)) {
+                    const { resolve, reject } = pending.get(data.id);
+                    pending.delete(data.id);
+                    if (data.error) reject(new Error(data.error.message));
+                    else resolve(data.result);
+                } else if (data.method === 'Runtime.executionContextCreated') {
+                    contexts.push(data.params.context);
+                }
+            } catch (e) { }
+        });
+
+        ws.on('open', async () => {
+            try {
+                await call('Runtime.enable', {});
+                await new Promise(r => setTimeout(r, 500));
+
+                const SCRIPT = `
+                    (async function() {
+                        const targetMode = ${JSON.stringify(modeName)}.toLowerCase();
+                        console.log('[MobileSetMode] Target:', targetMode);
+                        
+                        // Find mode button - look for Planning/Fast text
+                        const modeKeywords = ['planning', 'fast'];
+                        let modeButton = null;
+                        const allElements = document.querySelectorAll('button, div[role="button"], p, span');
+                        
+                        for (const el of allElements) {
+                            const text = (el.innerText || '').trim().toLowerCase();
+                            if (text.length < 2 || text.length > 30) continue;
+                            
+                            if (modeKeywords.some(k => text === k || text.startsWith(k))) {
+                                const clickable = el.closest('button') || el.closest('[role="button"]') || el;
+                                modeButton = clickable;
+                                console.log('[MobileSetMode] Found mode button:', text);
+                                break;
+                            }
+                        }
+                        
+                        if (!modeButton) {
+                            console.log('[MobileSetMode] Mode button not found');
+                            return { found: true, success: false, error: 'Mode button not found' };
+                        }
+                        
+                        // Click to open dropdown
+                        console.log('[MobileSetMode] Clicking mode button...');
+                        modeButton.click();
+                        
+                        // Wait for dropdown to appear
+                        await new Promise(r => setTimeout(r, 600));
+                        
+                        // Look for cursor-pointer elements in the dropdown
+                        let candidates = [];
+                        let allCursorPointerTexts = [];
+                        const getNorm = (el) => (el.innerText || el.textContent || '').trim().toLowerCase();
+                        
+                        const cursorPointerItems = document.querySelectorAll('[class*="cursor-pointer"]');
+                        console.log('[MobileSetMode] Found', cursorPointerItems.length, 'cursor-pointer elements');
+                        
+                        // First collect ALL cursor-pointer element texts for debugging
+                        for (const item of cursorPointerItems) {
+                            const text = getNorm(item);
+                            if (text.length > 1 && text.length < 150) {
+                                allCursorPointerTexts.push(text.substring(0, 60));
+                                // Add to candidates if it looks like a mode option
+                                // (either contains mode keywords OR is short text that could be a mode name)
+                                if (modeKeywords.some(k => text.includes(k)) || 
+                                    text.length < 30) {
+                                    candidates.push({ el: item, text });
+                                    console.log('[MobileSetMode] Candidate:', text.substring(0, 50));
+                                }
+                            }
+                        }
+                        
+                        console.log('[MobileSetMode] All cursor-pointer texts:', allCursorPointerTexts);
+                        console.log('[MobileSetMode] Total candidates:', candidates.length);
+                        
+                        // Find best match
+                        let bestMatch = null;
+                        for (const cand of candidates) {
+                            if (cand.text.includes(targetMode)) {
+                                bestMatch = cand.el;
+                                console.log('[MobileSetMode] Match found:', cand.text);
+                                break;
+                            }
+                        }
+                        
+                        if (bestMatch) {
+                            console.log('[MobileSetMode] Clicking:', bestMatch.innerText);
+                            const debugInfo = {
+                                tagName: bestMatch.tagName,
+                                className: bestMatch.className,
+                                outerHTML: bestMatch.outerHTML.substring(0, 200)
+                            };
+                            bestMatch.scrollIntoView({block: 'center', inline: 'center'});
+                            await new Promise(r => setTimeout(r, 100));
+                            bestMatch.click();
+                            return { found: true, success: true, selected: bestMatch.innerText, debug: debugInfo };
+                        }
+                        
+                        console.log('[MobileSetMode] No match found!');
+                        const candidateTexts = candidates.map(c => c.text.substring(0, 50));
+                        document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+                        return { found: true, success: false, error: 'Mode option not found', candidatesFound: candidateTexts, allTexts: allCursorPointerTexts.slice(0, 10) };
+                    })()
+                `;
+
+                // Search all execution contexts
+                for (const ctx of contexts) {
+                    try {
+                        const result = await call('Runtime.evaluate', {
+                            expression: SCRIPT,
+                            returnByValue: true,
+                            awaitPromise: true,
+                            contextId: ctx.id
+                        });
+
+                        if (result.result?.value?.found) {
+                            ws.close();
+                            resolve(result.result.value);
+                            return;
+                        }
+                    } catch (e) { }
+                }
+
+                ws.close();
+                resolve({ success: false, error: 'Webview context not found' });
+            } catch (e) {
+                ws.close();
+                resolve({ success: false, error: e.message });
+            }
+        });
+
+        ws.on('error', () => {
+            resolve({ success: false, error: 'WebSocket error' });
+        });
+    });
+}
+
+/**
+ * Get pending command approvals from the IDE
+ * Returns info about commands waiting for user input
+ */
+export async function getPendingApprovals() {
+    const target = await findEditorTarget();
+    if (!target) return { pending: false, count: 0, error: 'No editor target' };
+
+    return new Promise(async (resolve) => {
+        const { default: WebSocket } = await import('ws');
+        const ws = new WebSocket(target.webSocketDebuggerUrl);
+
+        const contexts = [];
+        let messageId = 1;
+        const pending = new Map();
+
+        const call = (method, params = {}) => new Promise((res, rej) => {
+            const id = messageId++;
+            pending.set(id, { resolve: res, reject: rej });
+            ws.send(JSON.stringify({ id, method, params }));
+            setTimeout(() => {
+                if (pending.has(id)) {
+                    pending.delete(id);
+                    rej(new Error('Timeout'));
+                }
+            }, 5000);
+        });
+
+        ws.on('message', (msg) => {
+            try {
+                const data = JSON.parse(msg.toString());
+                if (data.id && pending.has(data.id)) {
+                    const { resolve, reject } = pending.get(data.id);
+                    pending.delete(data.id);
+                    if (data.error) reject(new Error(data.error.message));
+                    else resolve(data.result);
+                } else if (data.method === 'Runtime.executionContextCreated') {
+                    contexts.push(data.params.context);
+                }
+            } catch (e) { }
+        });
+
+        ws.on('open', async () => {
+            try {
+                await call('Runtime.enable', {});
+                await new Promise(r => setTimeout(r, 500));
+
+                const SCRIPT = `
+                    (function() {
+                        // Look for various approval/input indicators
+                        const allText = document.body.innerText || '';
+                        
+                        // Check for multiple patterns that indicate pending approval
+                        // Pattern 1: "X step requires input" (original)
+                        const hasStepRequiresInput = /\\d+\\s*step.*requires.*input/i.test(allText);
+                        // Pattern 2: "Suggested sending input to command" 
+                        const hasSendingInput = /suggested.*sending.*input.*command/i.test(allText);
+                        // Pattern 3: "Send command input?"
+                        const hasSendCommandInput = /send.*command.*input/i.test(allText);
+                        
+                        const hasPendingApproval = hasStepRequiresInput || hasSendingInput || hasSendCommandInput;
+                        
+                        if (!hasPendingApproval) {
+                            return { found: true, pending: false, count: 0, debug: { allTextSample: allText.substring(0, 500) } };
+                        }
+                        
+                        // Extract the count if possible (for "X step requires input" pattern)
+                        const match = allText.match(/(\\d+)\\s*step.*requires.*input/i);
+                        const count = match ? parseInt(match[1]) : 1;
+                        
+                        // Look for approve/reject buttons
+                        // Common patterns: "Run", "Accept", "Approve", "Yes", "Cancel", "Reject", "No"
+                        const buttons = document.querySelectorAll('button, [role="button"], [class*="cursor-pointer"]');
+                        let approveBtn = null;
+                        let rejectBtn = null;
+                        
+                        const approveKeywords = ['run', 'accept', 'approve', 'yes', 'confirm', 'allow'];
+                        const rejectKeywords = ['cancel', 'reject', 'no', 'deny', 'skip'];
+                        
+                        for (const btn of buttons) {
+                            const text = (btn.innerText || btn.textContent || '').toLowerCase().trim();
+                            if (text.length < 20) {
+                                if (approveKeywords.some(k => text === k || text.includes(k))) {
+                                    approveBtn = { text, found: true };
+                                }
+                                if (rejectKeywords.some(k => text === k || text.includes(k))) {
+                                    rejectBtn = { text, found: true };
+                                }
+                            }
+                        }
+                        
+                        return {
+                            found: true,
+                            pending: true,
+                            count: count,
+                            approveButton: approveBtn,
+                            rejectButton: rejectBtn
+                        };
+                    })()
+                `;
+
+                for (const ctx of contexts) {
+                    try {
+                        const result = await call('Runtime.evaluate', {
+                            expression: SCRIPT,
+                            returnByValue: true,
+                            contextId: ctx.id
+                        });
+
+                        if (result.result?.value?.found && result.result.value.pending) {
+                            ws.close();
+                            resolve(result.result.value);
+                            return;
+                        }
+                    } catch (e) { }
+                }
+
+                ws.close();
+                resolve({ pending: false, count: 0 });
+            } catch (e) {
+                ws.close();
+                resolve({ pending: false, count: 0, error: e.message });
+            }
+        });
+
+        ws.on('error', () => {
+            resolve({ pending: false, count: 0, error: 'WebSocket error' });
+        });
+    });
+}
+
+/**
+ * Respond to a pending approval (approve or reject)
+ */
+export async function respondToApproval(action) {
+    const target = await findEditorTarget();
+    if (!target) return { success: false, error: 'No editor target' };
+
+    return new Promise(async (resolve) => {
+        const { default: WebSocket } = await import('ws');
+        const ws = new WebSocket(target.webSocketDebuggerUrl);
+
+        const contexts = [];
+        let messageId = 1;
+        const pending = new Map();
+
+        const call = (method, params = {}) => new Promise((res, rej) => {
+            const id = messageId++;
+            pending.set(id, { resolve: res, reject: rej });
+            ws.send(JSON.stringify({ id, method, params }));
+            setTimeout(() => {
+                if (pending.has(id)) {
+                    pending.delete(id);
+                    rej(new Error('Timeout'));
+                }
+            }, 5000);
+        });
+
+        ws.on('message', (msg) => {
+            try {
+                const data = JSON.parse(msg.toString());
+                if (data.id && pending.has(data.id)) {
+                    const { resolve, reject } = pending.get(data.id);
+                    pending.delete(data.id);
+                    if (data.error) reject(new Error(data.error.message));
+                    else resolve(data.result);
+                } else if (data.method === 'Runtime.executionContextCreated') {
+                    contexts.push(data.params.context);
+                }
+            } catch (e) { }
+        });
+
+        ws.on('open', async () => {
+            try {
+                await call('Runtime.enable', {});
+                await new Promise(r => setTimeout(r, 500));
+
+                const isApprove = action === 'approve';
+                const keywords = isApprove
+                    ? ['run', 'accept', 'approve', 'yes', 'confirm', 'allow']
+                    : ['cancel', 'reject', 'no', 'deny', 'skip'];
+
+                const SCRIPT = `
+                    (async function() {
+                        const keywords = ${JSON.stringify(keywords)};
+                        const isApprove = ${isApprove};
+                        
+                        // Find buttons with matching text
+                        const buttons = document.querySelectorAll('button, [role="button"], [class*="cursor-pointer"]');
+                        let targetBtn = null;
+                        
+                        for (const btn of buttons) {
+                            const text = (btn.innerText || btn.textContent || '').toLowerCase().trim();
+                            if (text.length < 20 && keywords.some(k => text === k || text.includes(k))) {
+                                targetBtn = btn;
+                                break;
+                            }
+                        }
+                        
+                        if (targetBtn) {
+                            targetBtn.scrollIntoView({ block: 'center' });
+                            await new Promise(r => setTimeout(r, 100));
+                            targetBtn.click();
+                            return { 
+                                found: true, 
+                                success: true, 
+                                action: isApprove ? 'approved' : 'rejected',
+                                buttonText: targetBtn.innerText 
+                            };
+                        }
+                        
+                        return { found: true, success: false, error: 'Button not found' };
+                    })()
+                `;
+
+                for (const ctx of contexts) {
+                    try {
+                        const result = await call('Runtime.evaluate', {
+                            expression: SCRIPT,
+                            returnByValue: true,
+                            awaitPromise: true,
+                            contextId: ctx.id
+                        });
+
+                        if (result.result?.value?.found && result.result.value.success) {
+                            ws.close();
+                            resolve(result.result.value);
+                            return;
+                        }
+                    } catch (e) { }
+                }
+
+                ws.close();
+                resolve({ success: false, error: 'Could not find approval button' });
+            } catch (e) {
+                ws.close();
+                resolve({ success: false, error: e.message });
+            }
+        });
+
+        ws.on('error', () => {
+            resolve({ success: false, error: 'WebSocket error' });
+        });
+    });
+}
